@@ -1,0 +1,172 @@
+---
+title: 'Project 1: NYPD Shootings (Historical)'
+author: "Learner"
+date: "`r Sys.Date()`"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(lubridate)
+library(readr)
+library(data.table)
+library(stringr)
+```
+
+## NYPD Shooting Incidents (Historical)
+
+Below is an overview and analysis of historical shooting data involving the NYPD.  This data was imported from the website identified in the course lecture.  Access the following link to retrieve an updated csv of this data: <https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD>
+
+The objective of this report will be to perform initial visualization and analysis of shootings relative to location (borough) where they occurred, with additional context to illustrate the gender, race, and age of the victims involved.  The correlation between number of shootings and murder will also be modeled.
+
+***Note: The libraries used for this report are listed below.***
+
+* library(tidyverse)
+* library(lubridate)
+* library(readr)
+* library(data.table)
+* library(stringr)
+
+### Step 1: Initial Import and Summary of Data
+```{r shoot_data, echo = TRUE}
+shoot_data <- read_csv("https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD")
+summary(shoot_data)
+```
+
+### Step 2: Tidying Data Import
+
+Tidying the data involved removing columns not related to analysis to be performed, and ensuring date information is in the correct format.
+```{r shoot_data2, echo = TRUE}
+# Removing columns that will not be of use, and setting column with date values to the correct format
+shoot_data2 <- shoot_data %>% select(-c(INCIDENT_KEY, OCCUR_TIME, PRECINCT, JURISDICTION_CODE, LOCATION_DESC, PERP_AGE_GROUP, X_COORD_CD, Y_COORD_CD, Latitude, Longitude, Lon_Lat)) %>% mutate(OCCUR_DATE = mdy(OCCUR_DATE))
+
+# Updating the working table with additional buckets for use in visualization later on
+shoot_data2$month <- month(shoot_data2$OCCUR_DATE)
+shoot_data2$year <- year(shoot_data2$OCCUR_DATE)
+shoot_data2$year_month <- paste(shoot_data2$year, shoot_data2$month, sep = '/')
+
+# Ensuring year_month bucket is in date format
+shoot_data2 <- shoot_data2 %>% mutate(year_month = ym(year_month))
+
+```
+
+***Note:*** **There is missing data for the PERP_SEX and PERP_RACE variables.**  The ***\<NA\>*** will need to be replaced by functional value indicating unknown.   It will be helpful to quantify unknown perp per boro, and relationship to victim sex and race.
+
+### Step 3: Visualizing and Analyzing Data
+
+The first graphic is a stacked bar chart illustrating the quantity of shootings per neigborhood, with fill color indicating the gender of the victim involved.
+
+```{r stacked_gender, echo = TRUE}
+boro_by_sex = shoot_data2 %>% count(BORO, VIC_SEX)
+ggplot(boro_by_sex, aes(fill = VIC_SEX, x = reorder(BORO, -n), y = n)) + geom_bar(position="stack", stat="identity") + theme(axis.text.x = element_text(angle=90, hjust = 1))
+```
+
+### Victim Race
+
+Below is a graphic showing the distribution of shootings in each neighborhood by race. 
+```{r stacked_race, echo = TRUE}
+boro_by_race = shoot_data2 %>% count(BORO, VIC_RACE)
+ggplot(boro_by_race, aes(fill = VIC_RACE, x = reorder(BORO, -n), y = n))+geom_bar(position="stack", stat="identity") + theme(axis.text.x = element_text(angle=90, hjust = 1))
+```
+
+### Victim Age
+
+Below is a graphic showing the distribution of shootings in each neighborhood by age. 
+```{r stacked_age, echo = TRUE}
+age_by_boro <- shoot_data2 %>% count(VIC_AGE_GROUP, BORO)
+
+ggplot(age_by_boro, aes(fill = VIC_AGE_GROUP, x = reorder(BORO, -n), y = n))+geom_bar(position="stack", stat="identity") + theme(axis.text.x = element_text(angle=90, hjust = 1))
+```
+
+
+### Trend for Shootings
+The following code chunk will generate a visualization of the monthly trend for overall shootings and murders.  
+
+```{r visualize_line, echo = TRUE}
+shootings_by_date <- shoot_data2 %>% group_by(year_month) %>% mutate(murder = sum(STATISTICAL_MURDER_FLAG == "TRUE")) %>% mutate(shootings = sum(STATISTICAL_MURDER_FLAG == "TRUE") + sum(STATISTICAL_MURDER_FLAG == "FALSE"))
+boro_by_date <- shoot_data2 %>% count(OCCUR_DATE, BORO)
+
+# Visualization of shooting and murder trend over time.  These figures are plotted as instances per month with shooting trend line in black, and murder trend line in red.
+ggplot(shootings_by_date, aes(year_month, shootings)) + geom_line() + geom_line(aes(year_month, murder), color = "red")
+
+shootings_boro_2 <- shoot_data2 %>% group_by(BORO, year_month) %>% mutate(murder = sum(STATISTICAL_MURDER_FLAG == "TRUE")) %>% mutate(shootings = sum(STATISTICAL_MURDER_FLAG == "TRUE") + sum(STATISTICAL_MURDER_FLAG == "FALSE"))
+
+```
+
+### Modeling
+
+The model below is applied to generate, based on known data, a prediction for the number of murders as a function of the number of shootings per date.
+```{r modeling_per_month, echo = TRUE}
+# Generating linear model to evaluate murders as a function of shootings per month
+mod_murder_by_date <- lm(murder ~ shootings , data = shootings_by_date)
+
+# Using model to generate prediction of murders each month for comparison with actual murders
+shootings_by_date <- bind_cols(shootings_by_date, pred = predict(mod_murder_by_date, shootings_by_date))
+
+```
+
+Below is a scatter plot, sorted by descending number of shootings, that makes use of the prediction generated in the linear model above. 
+*Note, The information along the x axis is not legible, but indicates the combined variable of year and month.* 
+
+This is helpful to show and support the accuracy or fit of the model used.  
+
+The predicted number of murders for each instance is shown in *red* , and the actual number of murders is shown in *blue*. 
+
+```{r model_murder_month_1, echo = TRUE}
+# Visualization of monthly actual murders in blue and predicted murders in red, sorted in order of descending total number of shootings for the month
+shootings_by_date %>% ggplot() + geom_point(aes(x = reorder(year_month, -shootings), y = murder), color = "blue") + geom_point(aes(x = reorder(year_month, -shootings), y = pred), color = "red") + theme(axis.text.x = element_text(angle=90, hjust = 1))
+```
+
+The plot below presents the same data as in the previous illustration in chronological order.  There is a clear trend showing a net decrease in murders until roughly 2020, where the number of shootings and murders increases significantly!
+
+```{r model_murder_month_2, echo = TRUE}
+# Same monthly visualization without sorting by number of shootings
+shootings_by_date %>% ggplot() + geom_point(aes(x = year_month, y = murder), color = "blue") + geom_point(aes(x = year_month, y = pred), color = "red")
+
+```
+
+To improve the resolution of the illustrations above, the following model and plots present the same information grouped annually.
+
+```{r modeling_per_year, echo = TRUE}
+
+# Dataset grouping murders and shootings by year
+shootings_by_year <- shoot_data2 %>% group_by(year) %>% mutate(murder_year = sum(STATISTICAL_MURDER_FLAG == "TRUE")) %>% mutate(shootings_year = sum(STATISTICAL_MURDER_FLAG == "TRUE") + sum(STATISTICAL_MURDER_FLAG == "FALSE"))
+
+# Linear model generated for yearly buckets to improve readability of visualizations
+mod_murder_by_year <- lm(murder_year ~ shootings_year , data = shootings_by_year)
+
+shootings_by_year <- bind_cols(shootings_by_year, pred = predict(mod_murder_by_year, shootings_by_year))
+
+# Without sort, the trend of total murders per year is shown with actual values in blue and values predicted by linear model in red.
+shootings_by_year %>% ggplot() + geom_point(aes(x = year, y = murder_year), color = "blue") + geom_point(aes(x = year, y = pred), color = "red")
+
+# Years sorted in descending order of total shootings reflects reasonable correlation between number of shootings and number of murders
+shootings_by_year %>% ggplot() + geom_point(aes(x = reorder(year, -shootings_year), y = murder_year), color = "blue") + geom_point(aes(x = reorder(year, -shootings_year), y = pred), color = "red")
+
+```
+
+To summarize in table form the top 10 months (and corresponding year) for both the most and least instances of murder.  This is to highlight a pattern in when the spikes occurred, specifically with highest values seen during the summer months, and the lowest observed during winter.  
+
+```{r summary, echo = TRUE}
+summary_set <- shootings_by_date %>% group_by(year_month) %>% summarize(murder = max(murder), shootings = max(shootings))
+
+# months with most murders and the corresponding year
+summary_set %>% slice_max(murder, n = 10) %>% select(year_month, murder, shootings)
+
+# months with lowest number of murders and the corresponding year
+summary_set %>% slice_min(murder, n = 10) %>% select(year_month, murder, shootings)
+```
+
+### Observations and Follow Up
+The most obvious observations indicated the majority of shootings and murder occurred in Brooklyn, and the lowest incidence occurred in Staten Island, with a consistency in all regions of victim profile (specifically black males aged 18 - 44).
+
+It was interesting to see the consistency with which the number of shootings and murder would spike annually, ususally during the summer months.  There is an obvious cycle, and the factors influencing this trend should be researched to glean actionable insights. 
+
+The trend for overall shootings, and those resulting in death, was obviously decreasing over the first 75% of the observed period.  The "dwell" or lowest sustained period of incidence occured between 2016 to 2020.  Following 2020, the significant increase in the number of shootings and resulting deaths needs to be more deeply analyzed.  It would be interesting to follow up with a study of incidence of gun violence in areas or among individuals impacted by Covid or measures to prevent transmission.  
+
+### Step 4: Bias Identification / Conclusion
+The initial observation and analysis would suggest a disproportionate impact to males of non-white race for police shootings.  This would have been my assumption starting this assignment, and is why I selected these variables for study.  
+To counter my bias, I would seek to incorporate additional and missing data to enable more robust analysis.  This would include but not be limited to information relative to perpetrator race and gender (much of this was unavailable), general population and demographic data for each boro, and information regarding threat or risk of harm to bystanders and officers.  Merging these data into this report for deeper analysis would be my next step to support conclusions with contextual information.
